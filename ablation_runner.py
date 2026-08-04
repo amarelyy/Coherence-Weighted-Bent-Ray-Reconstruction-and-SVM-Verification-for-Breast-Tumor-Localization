@@ -30,18 +30,26 @@ VARIANTS = [
     dict(name="DMAS+CF",          beamformer="dmas", use_bent_ray=False, use_cf=True),
     # dict(name="DAS+MultiLayer",   beamformer="das",  use_bent_ray=True,  use_cf=False),
     # dict(name="DMAS+MultiLayer",  beamformer="dmas", use_bent_ray=True,  use_cf=False),
-    dict(name="DAS+ML+CF",        beamformer="das",  use_bent_ray=True,  use_cf=True),
-    dict(name="DMAS+ML+CF",       beamformer="dmas", use_bent_ray=True,  use_cf=True),
+    # dict(name="DAS+ML+CF",        beamformer="das",  use_bent_ray=True,  use_cf=True),
+    # dict(name="DMAS+ML+CF",       beamformer="dmas", use_bent_ray=True,  use_cf=True),
+    dict(name="DAS+GIBR",      beamformer="das",  use_bent_ray=False, use_cf=False,
+             bent_ray_params={"model": "geometry_informed", "eps_fibro": 45.0, "z_frac": 0.80}),
+    dict(name="DMAS+GIBR",     beamformer="dmas", use_bent_ray=False, use_cf=False,
+             bent_ray_params={"model": "geometry_informed", "eps_fibro": 45.0, "z_frac": 0.80}),
+    dict(name="DAS+GIBR+CF",   beamformer="das",  use_bent_ray=False, use_cf=True,
+             bent_ray_params={"model": "geometry_informed", "eps_fibro": 45.0, "z_frac": 0.80}),
+    dict(name="DMAS+GIBR+CF",  beamformer="dmas", use_bent_ray=False, use_cf=True,
+             bent_ray_params={"model": "geometry_informed", "eps_fibro": 45.0, "z_frac": 0.80}),
 ]
-
 
 def _run_one(idx, variant, s21, tumor_model):
     try:
         r = reconstruct_scan(
             idx, s21, tumor_model,
             beamformer=variant["beamformer"],
-            use_bent_ray=variant["use_bent_ray"],
+            use_bent_ray=variant.get("use_bent_ray", False),
             use_cf=variant["use_cf"],
+            bent_ray_params=variant.get("bent_ray_params", None),
         )
         r.pop("diagnostics", None)
         return ("ok", idx, r)

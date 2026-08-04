@@ -744,3 +744,203 @@ def _bent_ray_single_cpu(ax, ay, axb, ayb, gx, gy,
         return d_air/v_air + d_skin/v_skin + d_int/v_interior
 
     return _leg(ax, ay) + _leg(axb, ayb)
+
+# ===========================================================================
+# Geometry-Informed Bent-Ray: Air → Fibro dengan boundary dari STL
+# Single-layer, tapi boundary irregular (bukan lingkaran)
+# ===========================================================================
+
+def load_stl_boundary(stl_path, z_frac=0.80, n_points=360):
+    """Load STL, extract 2D cross-section boundary at z_frac, return centered (bx, by) in meters."""
+    import trimesh
+    mesh = trimesh.load(str(stl_path), force='mesh')
+    z = mesh.bounds[0][2] + z_frac * (mesh.bounds[1][2] - mesh.bounds[0][2])
+    section = mesh.section(plane_origin=[0, 0, z], plane_normal=[0, 0, 1])
+    if section is None:
+        raise ValueError(f"No cross-section at z={z:.1f}")
+    
+    pts = section.vertices
+    x, y = pts[:, 0], pts[:, 1]
+    cx, cy = np.mean(x), np.mean(y)
+    x -= cx; y -= cy
+    
+    angles = np.arctan2(y, x)
+    si = np.argsort(angles)
+    x, y, angles = x[si], y[si], angles[si]
+    radii = np.sqrt(x**2 + y**2)
+    
+    from scipy.interpolate import interp1d
+    ae = np.concatenate([angles - 2*np.pi, angles, angles + 2*np.pi])
+    re = np.concatenate([radii, radii, radii])
+    es = np.argsort(ae); ae, re = ae[es], re[es]
+    au = np.linspace(-np.pi, np.pi, n_points, endpoint=False)
+    ri = interp1d(ae, re, kind='linear', bounds_error=False, fill_value='extrapolate')(au)
+    
+    bx = (ri * np.cos(au)) / 1000.0  # mm → meters
+    by = (ri * np.sin(au)) / 1000.0
+    return bx.astype(np.float64), by.astype(np.float64)
+
+
+_GIBR_CUDA_KERNEL = r"""
+extern "C" __global__
+void gibr_kernel(
+    const double* __restrict__ ant_x,
+    const double* __restrict__ ant_y,
+    const double* __restrict__ ant_x_b,
+    const double* __restrict__ ant_y_b,
+    const double* __restrict__ grid_x,
+    const double* __restrict__ grid_y,
+    const double* __restrict__ bnd_x,
+    const double* __restrict__ bnd_y,
+    double* __restrict__ delay_out,
+    const int n_ant,
+    const int n_pix,
+    const int n_bnd,
+    const double v_air,
+    const double v_tissue,
+    const int n_iter)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = n_ant * n_pix;
+    if (idx >= total) return;
+
+    int i_ant = idx / n_pix;
+    int i_pix = idx % n_pix;
+
+    double ax = ant_x[i_ant], ay = ant_y[i_ant];
+    double axb = ant_x_b[i_ant], ayb = ant_y_b[i_ant];
+    double gx = grid_x[i_pix], gy = grid_y[i_pix];
+    const double gr = 0.6180339887498949;
+
+    // Golden-section search along boundary for minimum-time refraction point
+    // Search over boundary parameter t in [0, n_bnd)
+    // Boundary point: bnd_x[t], bnd_y[t]
+
+    // --- LEG TX: antenna -> pixel via boundary ---
+    double lo = 0.0, hi = (double)(n_bnd - 1);
+    double c = hi - gr * (hi - lo);
+    double d = lo + gr * (hi - lo);
+
+    for (int it = 0; it < n_iter; it++) {
+        int ci = (int)(c + 0.5) % n_bnd;
+        int di = (int)(d + 0.5) % n_bnd;
+        double bcx = bnd_x[ci], bcy = bnd_y[ci];
+        double bdx = bnd_x[di], bdy = bnd_y[di];
+
+        double fc = sqrt((bcx-ax)*(bcx-ax)+(bcy-ay)*(bcy-ay))/v_air
+                  + sqrt((bcx-gx)*(bcx-gx)+(bcy-gy)*(bcy-gy))/v_tissue;
+        double fd = sqrt((bdx-ax)*(bdx-ax)+(bdy-ay)*(bdy-ay))/v_air
+                  + sqrt((bdx-gx)*(bdx-gx)+(bdy-gy)*(bdy-gy))/v_tissue;
+
+        if (fc < fd) { hi = d; d = c; c = hi - gr*(hi-lo); }
+        else { lo = c; c = d; d = lo + gr*(hi-lo); }
+    }
+
+    int best_i = (int)(0.5*(lo+hi) + 0.5) % n_bnd;
+    double bx = bnd_x[best_i], by = bnd_y[best_i];
+    double d_air_tx = sqrt((bx-ax)*(bx-ax)+(by-ay)*(by-ay));
+    double d_tis_tx = sqrt((bx-gx)*(bx-gx)+(by-gy)*(by-gy));
+    double total_tx = d_air_tx/v_air + d_tis_tx/v_tissue;
+
+    // --- LEG RX: antenna_b -> pixel via boundary ---
+    lo = 0.0; hi = (double)(n_bnd - 1);
+    c = hi - gr*(hi-lo); d = lo + gr*(hi-lo);
+
+    for (int it = 0; it < n_iter; it++) {
+        int ci = (int)(c + 0.5) % n_bnd;
+        int di = (int)(d + 0.5) % n_bnd;
+        double bcx = bnd_x[ci], bcy = bnd_y[ci];
+        double bdx = bnd_x[di], bdy = bnd_y[di];
+
+        double fc = sqrt((bcx-axb)*(bcx-axb)+(bcy-ayb)*(bcy-ayb))/v_air
+                  + sqrt((bcx-gx)*(bcx-gx)+(bcy-gy)*(bcy-gy))/v_tissue;
+        double fd = sqrt((bdx-axb)*(bdx-axb)+(bdy-ayb)*(bdy-ayb))/v_air
+                  + sqrt((bdx-gx)*(bdx-gx)+(bdy-gy)*(bdy-gy))/v_tissue;
+
+        if (fc < fd) { hi = d; d = c; c = hi - gr*(hi-lo); }
+        else { lo = c; c = d; d = lo + gr*(hi-lo); }
+    }
+
+    best_i = (int)(0.5*(lo+hi) + 0.5) % n_bnd;
+    bx = bnd_x[best_i]; by = bnd_y[best_i];
+    double d_air_rx = sqrt((bx-axb)*(bx-axb)+(by-ayb)*(by-ayb));
+    double d_tis_rx = sqrt((bx-gx)*(bx-gx)+(by-gy)*(by-gy));
+    double total_rx = d_air_rx/v_air + d_tis_rx/v_tissue;
+
+    delay_out[idx] = total_tx + total_rx;
+}
+"""
+
+_gibr_cuda_kernel = None
+if HAS_GPU:
+    import cupy as cp
+    _gibr_cuda_kernel = cp.RawKernel(_GIBR_CUDA_KERNEL, 'gibr_kernel')
+
+
+def geometry_informed_bent_ray_delay(ant_x, ant_y, ant_x_b, ant_y_b,
+                                      grid_x_flat, grid_y_flat,
+                                      boundary_x, boundary_y,
+                                      v_air, v_tissue,
+                                      n_gs_iters=60):
+    """
+    Single-layer bent-ray with arbitrary boundary from STL.
+    Air outside boundary (v_air), tissue inside (v_tissue).
+    Boundary is irregular contour, not a circle.
+    """
+    n_ant = len(ant_x)
+    n_pix = len(grid_x_flat)
+    n_bnd = len(boundary_x)
+
+    if HAS_GPU and _gibr_cuda_kernel is not None:
+        import cupy as cp
+        d_ax = cp.asarray(ant_x, dtype=cp.float64)
+        d_ay = cp.asarray(ant_y, dtype=cp.float64)
+        d_axb = cp.asarray(ant_x_b, dtype=cp.float64)
+        d_ayb = cp.asarray(ant_y_b, dtype=cp.float64)
+        d_gx = cp.asarray(grid_x_flat, dtype=cp.float64)
+        d_gy = cp.asarray(grid_y_flat, dtype=cp.float64)
+        d_bx = cp.asarray(boundary_x, dtype=cp.float64)
+        d_by = cp.asarray(boundary_y, dtype=cp.float64)
+        d_delay = cp.zeros(n_ant * n_pix, dtype=cp.float64)
+
+        total = n_ant * n_pix
+        threads = 256
+        blocks = (total + threads - 1) // threads
+
+        _gibr_cuda_kernel(
+            (blocks,), (threads,),
+            (d_ax, d_ay, d_axb, d_ayb, d_gx, d_gy, d_bx, d_by, d_delay,
+             n_ant, n_pix, n_bnd, v_air, v_tissue, n_gs_iters)
+        )
+        return cp.asnumpy(d_delay).reshape(n_ant, n_pix)
+    else:
+        # CPU fallback
+        delay = np.zeros((n_ant, n_pix))
+        gr = (np.sqrt(5.0) - 1.0) / 2.0
+        for i in range(n_ant):
+            for p in range(n_pix):
+                delay[i, p] = _gibr_single_cpu(
+                    ant_x[i], ant_y[i], ant_x_b[i], ant_y_b[i],
+                    grid_x_flat[p], grid_y_flat[p],
+                    boundary_x, boundary_y, v_air, v_tissue, n_gs_iters, gr)
+        return delay
+
+
+def _gibr_single_cpu(ax, ay, axb, ayb, gx, gy, bx, by, v_air, v_tis, n_iter, gr):
+    n_bnd = len(bx)
+    def _leg(sx, sy):
+        lo, hi = 0.0, float(n_bnd - 1)
+        c = hi - gr*(hi-lo); d = lo + gr*(hi-lo)
+        for _ in range(n_iter):
+            ci = int(c + 0.5) % n_bnd
+            di = int(d + 0.5) % n_bnd
+            fc = (np.sqrt((bx[ci]-sx)**2+(by[ci]-sy)**2)/v_air +
+                  np.sqrt((bx[ci]-gx)**2+(by[ci]-gy)**2)/v_tis)
+            fd = (np.sqrt((bx[di]-sx)**2+(by[di]-sy)**2)/v_air +
+                  np.sqrt((bx[di]-gx)**2+(by[di]-gy)**2)/v_tis)
+            if fc < fd: hi=d; d=c; c=hi-gr*(hi-lo)
+            else: lo=c; c=d; d=lo+gr*(hi-lo)
+        bi = int(0.5*(lo+hi)+0.5) % n_bnd
+        return (np.sqrt((bx[bi]-sx)**2+(by[bi]-sy)**2)/v_air +
+                np.sqrt((bx[bi]-gx)**2+(by[bi]-gy)**2)/v_tis)
+    return _leg(ax, ay) + _leg(axb, ayb)

@@ -74,6 +74,7 @@ PHANTOM_COMPOSITION_MM3 = {
 
 def _parse_adipose_id(phant_id):
     """'A16F14' -> 'A16'. Returns None if the pattern doesn't match."""
+    df["fib_model"] = df["phant_id"].str.extract(r'(F\d+)')[0]
     m = re.match(r'^(A\d+)F\d+$', str(phant_id))
     return m.group(1) if m else None
 

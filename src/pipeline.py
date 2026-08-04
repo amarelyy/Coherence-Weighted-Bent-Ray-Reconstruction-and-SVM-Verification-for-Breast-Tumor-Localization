@@ -28,6 +28,8 @@ from . import beamforming as bf
 from . import blob_detection as bd
 from . import metrics as mx
 
+from pathlib import Path
+
 DEFAULT_GRID_MARGIN_FACTOR = 1.5
 DEFAULT_GRID_STEP_MM = 1.0
 
@@ -45,12 +47,9 @@ _DELAY_CACHE = {}
 
 
 def _delay_cache_key(phant_id, use_bent_ray, ant_rad_mm, breast_radius_mm,
-                      v_tissue, bent_ray_params, margin_factor, grid_step_mm,
-                      shell_center):
-    if use_bent_ray:
-        extra = tuple(sorted((bent_ray_params or {}).items()))
-    else:
-        extra = shell_center
+                     v_tissue, bent_ray_params, margin_factor, grid_step_mm,
+                     shell_center):
+    extra = tuple(sorted((bent_ray_params or {}).items()))
     return (phant_id, use_bent_ray, round(ant_rad_mm, 3), round(breast_radius_mm, 3),
             round(v_tissue, 3), extra, margin_factor, grid_step_mm)
 
@@ -114,41 +113,49 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
     grid_x_m, grid_y_m = grid_x_mm.ravel() / 1000.0, grid_y_mm.ravel() / 1000.0
     shell_center_m = (shell_center[0] / 1000.0, shell_center[1] / 1000.0)
 
-    # ---- delay grid: two-medium baseline or 3-layer bent-ray (cached per phantom) ----
-        # ---- delay grid: two-medium baseline or multi-layer bent-ray (cached per phantom) ----
-    cache_key = _delay_cache_key(
-        row["phant_id"], use_bent_ray, ant_rad_mm, breast_radius_mm, v_tissue,
-        bent_ray_params, margin_factor, grid_step_mm, shell_center,
-    )
-    if cache_key in _DELAY_CACHE:
-        delay_grid = _DELAY_CACHE[cache_key]
+    # --- delay grid ---
+cache_key = _delay_cache_key(
+    row["phant_id"], use_bent_ray, ant_rad_mm, breast_radius_mm, v_tissue,
+    bent_ray_params, margin_factor, grid_step_mm, shell_center,
+)
+if cache_key in _DELAY_CACHE:
+    delay_grid = _DELAY_CACHE[cache_key]
+else:
+    params = {**DEFAULT_BENT_RAY_PARAMS, **(bent_ray_params or {})}
+    delay_model = params.get("model", "two_medium")
+
+    if delay_model == "geometry_informed":
+        # Load STL boundary for this phantom's fib_model
+        fib_model = row.get("fib_model", "F1")
+        stl_path = Path(__file__).resolve().parent.parent / "data" / f"{fib_model}.stl"
+        z_frac = params.get("z_frac", 0.80)
+        bx, by = physics.load_stl_boundary(stl_path, z_frac=z_frac)
+        v_fibro = physics.C_LIGHT / np.sqrt(params.get("eps_fibro", 45.0))
+        delay_grid = physics.geometry_informed_bent_ray_delay(
+            geom["ant_x"], geom["ant_y"], geom["ant_x_b"], geom["ant_y_b"],
+            grid_x_m, grid_y_m, bx, by,
+            physics.V_AIR, v_fibro,
+        )
+    elif use_bent_ray:
+        # Old MultiLayer (disabled but kept for reference)
+        fib_radius_mm = physics.estimate_fib_radius_mm(breast_radius_mm, fib_frac)
+        fib_radius_m = fib_radius_mm / 1000.0
+        v_adipose = physics.C_LIGHT / np.sqrt(params["eps_adipose"])
+        v_fibro = physics.C_LIGHT / np.sqrt(params["eps_fibro"])
+        delay_grid = physics.bent_ray_noskin_delay(
+            geom["ant_x"], geom["ant_y"], geom["ant_x_b"], geom["ant_y_b"],
+            grid_x_m, grid_y_m,
+            breast_radius_mm / 1000.0, fib_radius_m,
+            physics.V_AIR, v_adipose, v_fibro,
+        )
     else:
-        if use_bent_ray:
-            params = {**DEFAULT_BENT_RAY_PARAMS, **(bent_ray_params or {})}
-
-            # Hitung fib radius dari metadata
-            fib_frac = float(row["fib_fraction"])
-            fib_radius_mm = physics.estimate_fib_radius_mm(breast_radius_mm, fib_frac)
-            fib_radius_m = fib_radius_mm / 1000.0
-
-            # Velocity per layer (bukan eps_eff campuran)
-            v_adipose = physics.C_LIGHT / np.sqrt(params["eps_adipose"])
-            v_fibro = physics.C_LIGHT / np.sqrt(params["eps_fibro"])
-
-            delay_grid = physics.bent_ray_noskin_delay(
-                geom["ant_x"], geom["ant_y"], geom["ant_x_b"], geom["ant_y_b"],
-                grid_x_m, grid_y_m,
-                breast_radius_mm / 1000.0, fib_radius_m,
-                physics.V_AIR, v_adipose, v_fibro,
-            )
-        else:
-            delay_grid = physics.two_medium_delay(
-                geom["ant_x"], geom["ant_y"], geom["ant_x_b"], geom["ant_y_b"],
-                grid_x_m, grid_y_m,
-                breast_radius_mm / 1000.0, v_tissue, shell_center=shell_center_m,
-            )
-        delay_grid = delay_grid.reshape(-1, *grid_x_mm.shape)
-        _DELAY_CACHE[cache_key] = delay_grid
+        delay_grid = physics.two_medium_delay(
+            geom["ant_x"], geom["ant_y"], geom["ant_x_b"], geom["ant_y_b"],
+            grid_x_m, grid_y_m,
+            breast_radius_mm / 1000.0, v_tissue, shell_center=shell_center_m,
+        )
+    delay_grid = delay_grid.reshape(-1, *grid_x_mm.shape)
+    _DELAY_CACHE[cache_key] = delay_grid
 
     # ---- beamforming ----
     if beamformer == "das":
