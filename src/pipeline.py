@@ -31,10 +31,11 @@ from . import metrics as mx
 DEFAULT_GRID_MARGIN_FACTOR = 1.5
 DEFAULT_GRID_STEP_MM = 1.0
 
-DEFAULT_BENT_RAY_PARAMS = dict(
-    skin_thickness_mm=2.5,
-    eps_skin=45.0,
-)
+DEFAULT_BENT_RAY_PARAMS = {
+    "model": "multilayer_noskin",  # Air → Adipose → Fibro
+    "eps_adipose": 7.0,
+    "eps_fibro": 45.0
+}
 
 # Delay grids depend only on phantom-level geometry (breast radius, antenna
 # radius, tissue velocity, bent-ray params) — NOT on the per-scan signal.
@@ -114,6 +115,7 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
     shell_center_m = (shell_center[0] / 1000.0, shell_center[1] / 1000.0)
 
     # ---- delay grid: two-medium baseline or 3-layer bent-ray (cached per phantom) ----
+        # ---- delay grid: two-medium baseline or multi-layer bent-ray (cached per phantom) ----
     cache_key = _delay_cache_key(
         row["phant_id"], use_bent_ray, ant_rad_mm, breast_radius_mm, v_tissue,
         bent_ray_params, margin_factor, grid_step_mm, shell_center,
@@ -123,12 +125,21 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
     else:
         if use_bent_ray:
             params = {**DEFAULT_BENT_RAY_PARAMS, **(bent_ray_params or {})}
-            v_skin = physics.C_LIGHT / np.sqrt(params["eps_skin"])
-            delay_grid = physics.bent_ray_3layer_delay(
+
+            # Hitung fib radius dari metadata
+            fib_frac = float(row["fib_fraction"])
+            fib_radius_mm = physics.estimate_fib_radius_mm(breast_radius_mm, fib_frac)
+            fib_radius_m = fib_radius_mm / 1000.0
+
+            # Velocity per layer (bukan eps_eff campuran)
+            v_adipose = physics.C_LIGHT / np.sqrt(params["eps_adipose"])
+            v_fibro = physics.C_LIGHT / np.sqrt(params["eps_fibro"])
+
+            delay_grid = physics.bent_ray_noskin_delay(
                 geom["ant_x"], geom["ant_y"], geom["ant_x_b"], geom["ant_y_b"],
                 grid_x_m, grid_y_m,
-                breast_radius_mm / 1000.0, params["skin_thickness_mm"] / 1000.0,
-                physics.V_AIR, v_skin, v_tissue,
+                breast_radius_mm / 1000.0, fib_radius_m,
+                physics.V_AIR, v_adipose, v_fibro,
             )
         else:
             delay_grid = physics.two_medium_delay(
