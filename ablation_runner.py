@@ -28,8 +28,8 @@ VARIANTS = [
     dict(name="Raw DMAS",         beamformer="dmas", use_bent_ray=False, use_cf=False),
     dict(name="DAS+CF",           beamformer="das",  use_bent_ray=False, use_cf=True),
     dict(name="DMAS+CF",          beamformer="dmas", use_bent_ray=False, use_cf=True),
-    dict(name="DAS+MultiLayer",   beamformer="das",  use_bent_ray=True,  use_cf=False),
-    dict(name="DMAS+MultiLayer",  beamformer="dmas", use_bent_ray=True,  use_cf=False),
+    # dict(name="DAS+MultiLayer",   beamformer="das",  use_bent_ray=True,  use_cf=False),
+    # dict(name="DMAS+MultiLayer",  beamformer="dmas", use_bent_ray=True,  use_cf=False),
     dict(name="DAS+ML+CF",        beamformer="das",  use_bent_ray=True,  use_cf=True),
     dict(name="DMAS+ML+CF",       beamformer="dmas", use_bent_ray=True,  use_cf=True),
 ]

@@ -64,7 +64,7 @@ def gpu_info():
     if not _HAS_GPU:
         return "No GPU detected — running on CPU (NumPy)"
     dev = cp.cuda.runtime.getDeviceProperties(0)
-    mem_free, mem_total = cp.cuda.runtime.memGetInfo(0)
+    mem_free, mem_total = cp.cuda.runtime.memGetInfo()
     return (
         f"GPU: {dev['name'].decode()}\n"
         f"  Memory: {mem_free/1e9:.1f} GB free / {mem_total/1e9:.1f} GB total\n"
