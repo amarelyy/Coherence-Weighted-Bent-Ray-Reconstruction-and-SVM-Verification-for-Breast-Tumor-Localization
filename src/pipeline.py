@@ -102,9 +102,6 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
                 bx = bx * scale
                 by = by * scale
             v_fibro = physics.C_LIGHT / np.sqrt(params.get("eps_fibro", 45.0))
-            z_frac = params.get("z_frac", 0.80)
-            bx, by = physics.load_stl_boundary(stl_path, z_frac=z_frac)
-            v_fibro = physics.C_LIGHT / np.sqrt(params.get("eps_fibro", 45.0))
             delay_grid = physics.geometry_informed_bent_ray_delay(
                 geom["ant_x"], geom["ant_y"],
                 geom["ant_x_b"], geom["ant_y_b"],
