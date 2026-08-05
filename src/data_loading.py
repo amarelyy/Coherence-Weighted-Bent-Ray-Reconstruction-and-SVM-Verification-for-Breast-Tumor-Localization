@@ -71,13 +71,10 @@ PHANTOM_COMPOSITION_MM3 = {
     'A16F12': (1034420, 130177), 'A16F13': (1034420, 148442), 'A16F14': (1034420, 175302),
 }
 
-
 def _parse_adipose_id(phant_id):
     """'A16F14' -> 'A16'. Returns None if the pattern doesn't match."""
-    df["fib_model"] = df["phant_id"].str.extract(r'(F\d+)')[0]
     m = re.match(r'^(A\d+)F\d+$', str(phant_id))
     return m.group(1) if m else None
-
 
 def _density_class_to_birads(density_class):
     """'C1'..'C4' -> 1..4 (int). Returns NaN if not in the expected format."""
@@ -86,14 +83,12 @@ def _density_class_to_birads(density_class):
     m = re.match(r'^C(\d)$', str(density_class).strip())
     return int(m.group(1)) if m else np.nan
 
-
 def load_s21(path=S21_PATH):
     with open(path, "rb") as f:
         s21 = pickle.load(f)
     assert np.iscomplexobj(s21), "S21 dataset is not complex"
     assert np.all(np.isfinite(s21)), "S21 dataset has NaN/Inf"
     return s21
-
 
 def load_metadata(path=META_PATH):
     metadata = pd.read_pickle(path)
@@ -173,6 +168,8 @@ def merge_and_backfill(metadata, phantom_db):
         merged["tumor_x_mm"] *= 10.0
         merged["tumor_y_mm"] *= 10.0
 
+    merged["fib_model"] = merged["phant_id"].str.extract(r'(F\d+)')[0]
+    
     return merged
 
 
