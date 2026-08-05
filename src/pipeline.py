@@ -94,7 +94,6 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
             stl_path = Path(__file__).resolve().parent.parent / "data" / f"{fib_model}.stl"
             z_frac = params.get("z_frac", 0.80)
             bx, by = physics.load_stl_boundary(stl_path, z_frac=z_frac)
-            # Scale boundary to fit within breast_radius
             boundary_r = np.sqrt(bx**2 + by**2)
             mean_r = np.mean(boundary_r)
             if mean_r > 0:

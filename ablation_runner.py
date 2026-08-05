@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 from joblib import Parallel, delayed
+import numpy as np
 
 from src.data_loading import load_all_data
 from src.pipeline import reconstruct_scan
@@ -64,7 +65,7 @@ def run_variant(variant, s21, tumor_model, n_scans, n_jobs=1):
     with no caching.
     """
     outcomes = Parallel(n_jobs=n_jobs, verbose=5)(
-        delayed(_run_one)(idx, variant, s21, tumor_model) for idx in range(n_scans)
+                delayed(_run_one)(idx, variant, s21, tumor_model) for idx in np.random.choice(len(tumor_model), size=n_scans, replace=False)
     )
     rows = [r for status, idx, r in outcomes if status == "ok"]
     failed = [(idx, r) for status, idx, r in outcomes if status == "fail"]

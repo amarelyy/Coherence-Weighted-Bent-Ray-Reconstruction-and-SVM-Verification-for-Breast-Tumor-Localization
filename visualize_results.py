@@ -12,7 +12,7 @@ matplotlib.rcParams.update({"font.size": 11, "figure.dpi": 150})
 
 def load_all_results(results_dir):
     results_dir = Path(results_dir)
-    csvs = sorted(results_dir.glob("ablation_*.csv"))
+    csvs = sorted([f for f in results_dir.glob("ablation_*.csv") if "summary" not in f.name])
     if not csvs:
         print(f"No ablation_*.csv in {results_dir}"); return None
     dfs = []
@@ -20,7 +20,8 @@ def load_all_results(results_dir):
         df = pd.read_csv(cp)
         df["variant"] = cp.stem.replace("ablation_", "").replace("_", "+")
         dfs.append(df)
-        print(f"  {df['variant']}: {len(df)} scans, LE={df['localization_error_mm'].mean():.1f}mm")
+        vn = cp.stem.replace("ablation_", "").replace("_", "+")
+        print(f"  {vn}: {len(df)} scans, LE={df['localization_error_mm'].mean():.1f}mm")
     return pd.concat(dfs, ignore_index=True)
 
 def _color(v):
@@ -51,7 +52,8 @@ def plot_le_boxplot(df, out):
     vs=sorted(df["variant"].unique())
     data=[df[df["variant"]==v]["localization_error_mm"].values for v in vs]
     fig,ax=plt.subplots(figsize=(12,6))
-    bp=ax.boxplot(data,labels=vs,patch_artist=True,widths=.6)
+    bp=ax.boxplot(data,patch_artist=True,widths=.6)
+    ax.set_xticklabels(vs)
     for p,c in zip(bp["boxes"],[_color(v) for v in vs]): p.set_facecolor(c); p.set_alpha(.6)
     ax.axhline(20,color="red",ls="--",alpha=.5); ax.set_ylabel("LE (mm)")
     ax.set_title("LE Distribution by Variant"); plt.xticks(rotation=30,ha="right")
