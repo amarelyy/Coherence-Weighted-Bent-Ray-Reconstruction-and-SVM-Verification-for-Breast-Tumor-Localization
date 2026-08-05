@@ -94,6 +94,16 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
             stl_path = Path(__file__).resolve().parent.parent / "data" / f"{fib_model}.stl"
             z_frac = params.get("z_frac", 0.80)
             bx, by = physics.load_stl_boundary(stl_path, z_frac=z_frac)
+            # Scale boundary to fit within breast_radius
+            boundary_r = np.sqrt(bx**2 + by**2)
+            mean_r = np.mean(boundary_r)
+            if mean_r > 0:
+                scale = (breast_radius_mm / 1000.0) / mean_r
+                bx = bx * scale
+                by = by * scale
+            v_fibro = physics.C_LIGHT / np.sqrt(params.get("eps_fibro", 45.0))
+            z_frac = params.get("z_frac", 0.80)
+            bx, by = physics.load_stl_boundary(stl_path, z_frac=z_frac)
             v_fibro = physics.C_LIGHT / np.sqrt(params.get("eps_fibro", 45.0))
             delay_grid = physics.geometry_informed_bent_ray_delay(
                 geom["ant_x"], geom["ant_y"],
