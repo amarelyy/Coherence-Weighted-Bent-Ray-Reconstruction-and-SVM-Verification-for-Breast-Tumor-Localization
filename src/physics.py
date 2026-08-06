@@ -315,6 +315,38 @@ def _leg_time_two_medium(p0x, p0y, grid_x, grid_y, shell_radius_m,
 
     return dist_air / v_air + dist_tissue / v_tissue
 
+def _leg_time_two_medium(p0x, p0y, grid_x, grid_y, shell_radius_m,
+                         v_air, v_tissue, shell_center=(0.0, 0.0)):
+    """Vectorized ray-circle intersection for tissue path length."""
+    cx, cy = shell_center
+    p0x_s, p0y_s = p0x - cx, p0y - cy
+    gx_s, gy_s = grid_x - cx, grid_y - cy
+
+    dx = gx_s - p0x_s
+    dy = gy_s - p0y_s
+    seg_len = xp.sqrt(dx ** 2 + dy ** 2)
+
+    a = dx ** 2 + dy ** 2
+    b = 2.0 * (p0x_s * dx + p0y_s * dy)
+    c = p0x_s ** 2 + p0y_s ** 2 - shell_radius_m ** 2
+
+    disc = b ** 2 - 4.0 * a * c
+    valid = disc >= 0
+
+    a_safe = xp.where(a == 0, 1e-30, a)
+    sqrt_disc = xp.zeros_like(dx)
+    sqrt_disc[valid] = xp.sqrt(disc[valid])
+
+    t1 = (-b - sqrt_disc) / (2.0 * a_safe)
+    t2 = (-b + sqrt_disc) / (2.0 * a_safe)
+    t_lo = xp.clip(xp.minimum(t1, t2), 0.0, 1.0)
+    t_hi = xp.clip(xp.maximum(t1, t2), 0.0, 1.0)
+
+    tissue_frac = xp.where(valid, xp.maximum(t_hi - t_lo, 0.0), 0.0)
+    dist_tissue = tissue_frac * seg_len
+    dist_air = seg_len - dist_tissue
+
+    return dist_air / v_air + dist_tissue / v_tissue
 
 def two_medium_delay(ant_x, ant_y, ant_x_b, ant_y_b, grid_x, grid_y,
                      shell_radius_m, v_tissue, shell_center=(0.0, 0.0),
@@ -944,3 +976,68 @@ def _gibr_single_cpu(ax, ay, axb, ayb, gx, gy, bx, by, v_air, v_tis, n_iter, gr)
         return (np.sqrt((bx[bi]-sx)**2+(by[bi]-sy)**2)/v_air +
                 np.sqrt((bx[bi]-gx)**2+(by[bi]-gy)**2)/v_tis)
     return _leg(ax, ay) + _leg(axb, ayb)
+
+# ===========================================================================
+# STL-Informed Two-Medium Delay
+# ===========================================================================
+
+def _leg_time_stl(p0x, p0y, grid_x, grid_y, bnd_x, bnd_y, v_air, v_tissue):
+    """STL-informed leg time using per-segment vectorized intersection."""
+    orig_shape = grid_x.shape
+    gx = grid_x.ravel()
+    gy = grid_y.ravel()
+    n_pix = len(gx)
+    n_bnd = len(bnd_x)
+
+    dx = gx - p0x
+    dy = gy - p0y
+    seg_len = xp.sqrt(dx ** 2 + dy ** 2)
+
+    all_t = xp.full((n_pix, n_bnd), xp.inf)
+    bx2 = xp.roll(bnd_x, -1)
+    by2 = xp.roll(bnd_y, -1)
+
+    for s in range(n_bnd):
+        ex = bx2[s] - bnd_x[s]
+        ey = by2[s] - bnd_y[s]
+        denom = dx * ey - dy * ex
+        safe_d = xp.where(xp.abs(denom) < 1e-30, 1e-30, denom)
+        t_val = ((bnd_x[s] - p0x) * ey - (bnd_y[s] - p0y) * ex) / safe_d
+        u_val = ((bnd_x[s] - p0x) * dy - (bnd_y[s] - p0y) * dx) / safe_d
+        valid = (u_val >= 0) & (u_val <= 1) & (t_val > 1e-10) & (t_val < seg_len - 1e-10)
+        all_t[:, s] = xp.where(valid, t_val, xp.inf)
+
+    t_sorted = xp.sort(all_t, axis=1)
+    tissue_dist = xp.zeros(n_pix)
+    max_pairs = min(n_bnd // 2, 4)
+    for k in range(max_pairs):
+        t_in = t_sorted[:, 2 * k]
+        t_out = t_sorted[:, 2 * k + 1]
+        valid_pair = (t_in < xp.inf) & (t_out < xp.inf)
+        tissue_dist = tissue_dist + xp.where(valid_pair, t_out - t_in, 0.0)
+
+    air_dist = seg_len - tissue_dist
+    result = air_dist / v_air + tissue_dist / v_tissue
+    return result.reshape(orig_shape)
+
+
+def stl_informed_two_medium_delay(ant_x, ant_y, ant_x_b, ant_y_b,
+                                   grid_x, grid_y,
+                                   boundary_x, boundary_y,
+                                   v_tissue, v_air=V_AIR):
+    """STL-informed two-medium delay. Drop-in replacement for two_medium_delay."""
+    ant_x, ant_y = to_gpu(ant_x), to_gpu(ant_y)
+    ant_x_b, ant_y_b = to_gpu(ant_x_b), to_gpu(ant_y_b)
+    grid_x, grid_y = to_gpu(grid_x), to_gpu(grid_y)
+    bnd_x, bnd_y = to_gpu(boundary_x), to_gpu(boundary_y)
+
+    n_ant = len(ant_x)
+    delay = xp.zeros((n_ant, grid_x.shape[-1]))
+
+    for i in range(n_ant):
+        t_a = _leg_time_stl(ant_x[i], ant_y[i], grid_x, grid_y,
+                            bnd_x, bnd_y, v_air, v_tissue)
+        t_b = _leg_time_stl(ant_x_b[i], ant_y_b[i], grid_x, grid_y,
+                            bnd_x, bnd_y, v_air, v_tissue)
+        delay[i] = t_a + t_b
+    return delay

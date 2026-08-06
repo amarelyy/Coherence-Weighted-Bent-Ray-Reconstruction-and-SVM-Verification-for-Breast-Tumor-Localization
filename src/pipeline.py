@@ -124,13 +124,33 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
                 physics.V_AIR, v_adipose, v_fibro,
             )
         else:
-            delay_grid = physics.two_medium_delay(
-                geom["ant_x"], geom["ant_y"],
-                geom["ant_x_b"], geom["ant_y_b"],
-                grid_x_m, grid_y_m,
-                breast_radius_mm / 1000.0, v_tissue,
-                shell_center=shell_center_m,
-            )
+            # Try STL-informed first, fallback to circle two_medium
+            fib_model = str(row.get("fib_model", "F1"))
+            stl_path = Path(__file__).resolve().parent.parent / "data" / f"{fib_model}.stl"
+            if stl_path.exists():
+                z_frac = params.get("z_frac", 0.80)
+                bx, by = physics.load_stl_boundary(stl_path, z_frac=z_frac)
+                # Scale boundary to match breast_radius
+                boundary_r = np.sqrt(bx**2 + by**2)
+                mean_r = np.mean(boundary_r)
+                if mean_r > 0:
+                    scale = (breast_radius_mm / 1000.0) / mean_r
+                    bx = bx * scale
+                    by = by * scale
+                delay_grid = physics.stl_informed_two_medium_delay(
+                    geom["ant_x"], geom["ant_y"],
+                    geom["ant_x_b"], geom["ant_y_b"],
+                    grid_x_m, grid_y_m,
+                    bx, by, v_tissue,
+                )
+            else:
+                delay_grid = physics.two_medium_delay(
+                    geom["ant_x"], geom["ant_y"],
+                    geom["ant_x_b"], geom["ant_y_b"],
+                    grid_x_m, grid_y_m,
+                    breast_radius_mm / 1000.0, v_tissue,
+                    shell_center=shell_center_m,
+                )
 
         delay_grid = delay_grid.reshape(-1, *grid_x_mm.shape)
         _DELAY_CACHE[cache_key] = delay_grid
