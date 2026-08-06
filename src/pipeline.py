@@ -154,6 +154,10 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
     else:
         raise ValueError(f"Unknown beamformer: {beamformer!r}")
 
+    # ---- Add enhancement for visualization only ----
+    # Keep raw img for blob detection and metrics (LE stays same)
+    img_for_viz = sp.enhance_for_visualization(img)
+
     blob = bd.extract_blob_candidate(img, axis_mm, axis_mm,
                                      bias_alpha=bias_alpha)
 
@@ -192,7 +196,7 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
 
     if return_diagnostics:
         result["diagnostics"] = dict(
-            image=img, cf_map=cf_map, tumor_mask=blob["tumor_mask"],
+            image=img_for_viz, cf_map=cf_map, tumor_mask=blob["tumor_mask"],
             axis_mm=axis_mm, time_signal=time_signal,
             time_signal_filtered=time_signal_filtered, delay_grid=delay_grid,
         )

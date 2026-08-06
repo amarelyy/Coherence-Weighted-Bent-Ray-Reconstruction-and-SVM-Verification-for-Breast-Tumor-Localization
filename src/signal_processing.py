@@ -25,7 +25,7 @@ N_TIME_PTS = 1024
 
 
 def to_time_domain(fd_signal, window_alpha=0.25, n_time_pts=N_TIME_PTS):
-    """Frequency-to-time domain via ICZT. Always runs on CPU."""
+    """Frequency-to-time domain via ICZT with RMS normalization."""
     if not ICZT_AVAILABLE:
         raise ImportError(
             "umbmid.sigproc.iczt not importable — copy the umbmid/ "
@@ -34,9 +34,39 @@ def to_time_domain(fd_signal, window_alpha=0.25, n_time_pts=N_TIME_PTS):
     fd_np = np.asarray(fd_signal)
     window = tukey(fd_np.shape[0], alpha=window_alpha)
     fd_windowed = fd_np * window[:, None]
-    return iczt(fd_windowed, ini_t=TIME_START_S, fin_t=TIME_STOP_S,
-                n_time_pts=n_time_pts,
-                ini_f=FREQ_START_HZ, fin_f=FREQ_STOP_HZ)
+    time_signal = iczt(fd_windowed, ini_t=TIME_START_S, fin_t=TIME_STOP_S,
+                       n_time_pts=n_time_pts,
+                       ini_f=FREQ_START_HZ, fin_f=FREQ_STOP_HZ)
+    
+    # Add RMS normalization per channel (from reconstruction_v2.ipynb)
+    time_signal = rms_normalize(time_signal)
+    
+    return time_signal
+    
+def rms_normalize(time_signal):
+    """RMS normalization per channel from reconstruction_v2.ipynb."""
+    rms = np.sqrt(np.mean(np.abs(time_signal) ** 2, axis=0, keepdims=True))
+    return time_signal / (rms + 1e-12)
+
+
+def mer_enhance(img, power=2.0):
+    """MER enhancement from reconstruction_v2.ipynb."""
+    norm = img / (img.max() + 1e-12)
+    return norm ** power
+
+
+def gamma_correction(img, gamma=0.5):
+    """Gamma correction from reconstruction_v2.ipynb."""
+    norm = img / (img.max() + 1e-12)
+    return norm ** gamma
+
+
+def enhance_for_visualization(img):
+    """Apply MER + gamma enhancement for clean visualization."""
+    img_abs = np.abs(img)
+    mer_img = mer_enhance(img_abs, power=2.0)
+    enhanced = gamma_correction(mer_img, gamma=0.5)
+    return enhanced
 
 
 def get_time_axis(n_time_pts=N_TIME_PTS):
