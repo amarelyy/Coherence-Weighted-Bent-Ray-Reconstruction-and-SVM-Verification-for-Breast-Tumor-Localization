@@ -2,6 +2,7 @@
 src/pipeline.py
 
 reconstruct_scan() — self-contained, per-scan reconstruction.
+UPDATED: CF power tuning, front-surface bias correction, finer grid.
 """
 
 from pathlib import Path
@@ -23,6 +24,8 @@ DEFAULT_BENT_RAY_PARAMS = {
     "eps_adipose": 7.0,
     "eps_fibro": 45.0,
     "z_frac": 0.80,
+    "cf_power": 1.5,
+    "bias_alpha": 0.3,
 }
 
 _DELAY_CACHE = {}
@@ -44,7 +47,6 @@ def build_grid(breast_radius_mm, margin_factor=DEFAULT_GRID_MARGIN_FACTOR,
                         grid_step_mm)
     grid_x_mm, grid_y_mm = np.meshgrid(axis_mm, axis_mm)
     return grid_x_mm, grid_y_mm, axis_mm, grid_radius_mm
-
 
 def reconstruct_scan(scan_idx, s21, tumor_model,
                      beamformer="das", use_bent_ray=False, use_cf=True,
@@ -77,6 +79,8 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
 
     params = {**DEFAULT_BENT_RAY_PARAMS, **(bent_ray_params or {})}
     delay_model = params.get("model", "two_medium")
+    cf_power = params.get("cf_power", 1.5)
+    bias_alpha = params.get("bias_alpha", 0.3)
 
     if use_bent_ray and delay_model == "two_medium":
         delay_model = "multilayer_noskin"
@@ -94,7 +98,6 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
             stl_path = Path(__file__).resolve().parent.parent / "data" / f"{fib_model}.stl"
             z_frac = params.get("z_frac", 0.80)
             bx, by = physics.load_stl_boundary(stl_path, z_frac=z_frac)
-            # Scale boundary to fit within breast_radius
             boundary_r = np.sqrt(bx**2 + by**2)
             mean_r = np.mean(boundary_r)
             if mean_r > 0:
@@ -131,24 +134,29 @@ def reconstruct_scan(scan_idx, s21, tumor_model,
 
         delay_grid = delay_grid.reshape(-1, *grid_x_mm.shape)
         _DELAY_CACHE[cache_key] = delay_grid
-
+        
     if beamformer == "das":
         if use_cf:
-            _, cf_map, img = bf.das_coherent_cf(time_signal_filtered, time_axis, delay_grid)
+            _, cf_map, img = bf.das_coherent_cf(
+                time_signal_filtered, time_axis, delay_grid,
+                cf_power=cf_power)
         else:
             img = bf.das_coherent(time_signal_filtered, time_axis, delay_grid)
             cf_map = None
     elif beamformer == "dmas":
         td_mag = np.abs(time_signal_filtered)
         if use_cf:
-            img, cf_map = bf.dmas_cf(time_signal_filtered, td_mag, time_axis, delay_grid)
+            img, cf_map = bf.dmas_cf(
+                time_signal_filtered, td_mag, time_axis, delay_grid,
+                cf_power=cf_power)
         else:
             img = bf.dmas(td_mag, time_axis, delay_grid)
             cf_map = None
     else:
         raise ValueError(f"Unknown beamformer: {beamformer!r}")
 
-    blob = bd.extract_blob_candidate(img, axis_mm, axis_mm)
+    blob = bd.extract_blob_candidate(img, axis_mm, axis_mm,
+                                     bias_alpha=bias_alpha)
 
     gt_x_mm = float(row["tumor_x_mm"])
     gt_y_mm = float(row["tumor_y_mm"])
